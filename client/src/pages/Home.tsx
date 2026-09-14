@@ -35,7 +35,9 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import snapshot from "../data/snapshot.json";
+import { trpc } from "@/lib/trpc";
+import EvidenceStoragePanel from "../components/EvidenceStoragePanel";
+import embeddedSnapshot from "../data/snapshot.json";
 import { useTheme } from "../contexts/ThemeContext";
 
 type DetailItem = {
@@ -83,16 +85,6 @@ const dateLabel = (value: string | null | undefined) => {
     timeZone: "Asia/Singapore",
   }).format(date);
 };
-
-const readTime = new Intl.DateTimeFormat("en-SG", {
-  day: "2-digit",
-  month: "short",
-  year: "numeric",
-  hour: "2-digit",
-  minute: "2-digit",
-  hour12: false,
-  timeZone: "Asia/Singapore",
-}).format(new Date(snapshot.meta.generatedAt));
 
 function statusTone(label: string) {
   const value = label.toUpperCase();
@@ -271,7 +263,7 @@ function Filters({
   );
 }
 
-function MrlChart() {
+function MrlChart({ snapshot }: { snapshot: typeof embeddedSnapshot }) {
   const data = snapshot.mrlResults.confirmedMonths
     .filter((row) => row.confirmedSC != null || row.storeSalesProxy != null)
     .map((row) => ({
@@ -306,6 +298,22 @@ function MrlChart() {
 
 export default function Home() {
   const { theme, toggleTheme } = useTheme();
+  const persistedSnapshot = trpc.dashboard.latest.useQuery(undefined, { retry: false, refetchOnWindowFocus: false });
+  const snapshot = (persistedSnapshot.data?.snapshot ?? embeddedSnapshot) as typeof embeddedSnapshot;
+  const readTime = new Intl.DateTimeFormat("en-SG", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZone: "Asia/Singapore",
+  }).format(new Date(snapshot.meta.generatedAt));
+  const persistenceLabel = persistedSnapshot.data
+    ? `DATABASE SNAPSHOT · ${persistedSnapshot.data.version}`
+    : persistedSnapshot.isLoading
+      ? "CHECKING DATABASE"
+      : "EMBEDDED READ-ONLY FALLBACK";
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [detail, setDetail] = useState<DetailItem | null>(null);
@@ -314,33 +322,35 @@ export default function Home() {
   const [actionFilters, setActionFilters] = useState({ business: "All", area: "All", priority: "All", status: "All" });
   const [automationFilters, setAutomationFilters] = useState({ business: "All", area: "All", priority: "All", status: "All" });
 
-  const automationStatuses = ["Planning only", "Test evidence only", "Runtime verified", "Live approved"];
+  const automationStatuses = ["New / planning record", "Partial test evidence", "Test ready", "Runtime verified", "Live approved", "Existing live record"];
   const automationAreas = useMemo(
     () => Array.from(new Set(snapshot.automation.automations.map((item) => item.area))).sort(),
-    [],
+    [snapshot],
   );
   const actionAreas = useMemo(
     () => Array.from(new Set(snapshot.todayActions.map((item) => item.area))).sort(),
-    [],
+    [snapshot],
   );
   const actionStatuses = useMemo(
     () => Array.from(new Set(snapshot.todayActions.map((item) => item.status))).sort(),
-    [],
+    [snapshot],
   );
   const actionPriorities = useMemo(
     () => Array.from(new Set(snapshot.todayActions.map((item) => item.priority))).sort(),
-    [],
+    [snapshot],
   );
   const automationPriorities = useMemo(
     () => Array.from(new Set(snapshot.automation.automations.map((item) => item.priority))).sort(),
-    [],
+    [snapshot],
   );
 
   const stageLabel = (item: (typeof snapshot.automation.automations)[number]) => {
+    if (item.recordType === "EXISTING LIVE RECORD") return "Existing live record";
     if (item.liveApproved) return "Live approved";
     if (item.runtimeVerified) return "Runtime verified";
-    if (item.testReady) return "Test evidence only";
-    return "Planning only";
+    if (item.testReady) return "Test ready";
+    if (item.partialTestEvidence) return "Partial test evidence";
+    return "New / planning record";
   };
 
   const filteredAutomations = useMemo(() => {
@@ -353,7 +363,7 @@ export default function Home() {
       const searchMatch = !query || `${item.id} ${item.name} ${item.owner} ${item.nextDependency}`.toLowerCase().includes(query);
       return businessMatch && areaMatch && priorityMatch && statusMatch && searchMatch;
     });
-  }, [automationFilters, automationSearch]);
+  }, [automationFilters, automationSearch, snapshot]);
 
   const filteredActions = useMemo(() => snapshot.todayActions.filter((item) => {
     const businessMatch = actionFilters.business === "All" || item.business === actionFilters.business || item.business === "Both";
@@ -361,7 +371,7 @@ export default function Home() {
     const priorityMatch = actionFilters.priority === "All" || item.priority === actionFilters.priority;
     const statusMatch = actionFilters.status === "All" || item.status === actionFilters.status;
     return businessMatch && areaMatch && priorityMatch && statusMatch;
-  }), [actionFilters]);
+  }), [actionFilters, snapshot]);
 
   const missingCount = snapshot.todayActions.filter((item) => /(MISSING|UNVERIFIED|NOT OBTAINED|PROVISIONAL)/.test(item.status)).length;
   const latestMarketing = snapshot.marketing.at(-1);
@@ -394,12 +404,14 @@ export default function Home() {
     title: `${item.id} · ${item.name}`,
     subtitle: `${item.business} · ${item.area} · ${item.priority}`,
     rows: [
+      { label: "Source record type", value: item.recordType },
       { label: "Formal planning status", value: item.planningStatus },
       { label: "Sandbox status", value: item.sandboxStatus },
-      { label: "Data ready", value: item.dataReady ? "YES — SOURCE GATE RECORDED" : "NO / NOT VERIFIED" },
-      { label: "Test ready", value: item.testReady ? "PARTIAL TEST EVIDENCE EXISTS" : "NO INTEGRATION TEST" },
-      { label: "Runtime verified", value: item.runtimeVerified ? "YES" : "NO — EXECUTION ID, TIME AND OUTCOME NOT OBTAINED" },
-      { label: "Live approved", value: item.liveApproved ? "YES" : "NO" },
+      { label: "Data ready", value: item.dataReady ? "YES — SOURCE GATE RECORDED" : "NO — EXPLICIT GATE NOT RECORDED" },
+      { label: "Partial test evidence", value: item.recordType === "EXISTING LIVE RECORD" ? "NOT ASSESSED — SOURCE METADATA ONLY" : item.partialTestEvidence ? `YES — ${item.coverage}` : "NO" },
+      { label: "Test ready", value: item.recordType === "EXISTING LIVE RECORD" ? "NOT ASSESSED — SOURCE METADATA ONLY" : item.testReady ? "YES — EXPLICIT GATE RECORDED" : "NO — EXPLICIT GATE NOT RECORDED" },
+      { label: "Runtime verified", value: item.recordType === "EXISTING LIVE RECORD" ? "NOT RE-TESTED IN THIS READ" : item.runtimeVerified ? "YES" : "NO — EXECUTION ID, TIME AND OUTCOME NOT OBTAINED" },
+      { label: "Live approved", value: item.recordType === "EXISTING LIVE RECORD" ? "N/A — PRE-EXISTING LIVE SOURCE RECORD" : item.liveApproved ? "YES" : "NO" },
       { label: "Safety mode", value: item.safetyMode },
       { label: "Owner", value: item.owner },
       { label: "Next dependency", value: item.nextDependency },
@@ -587,7 +599,7 @@ export default function Home() {
                   <div><h3>Monthly SC trend</h3><p>Confirmed actuals; dotted line is provisional proxy only.</p></div>
                   <span className="pace-pill">Elapsed-year pace {percent(snapshot.mrlResults.elapsedYearPace)}</span>
                 </div>
-                <MrlChart />
+                <MrlChart snapshot={snapshot} />
                 <div className="legend"><span><i className="legend-confirmed" />Confirmed SC</span><span><i className="legend-provisional" />Provisional proxy</span><span><i className="legend-target" />Monthly target equivalent</span></div>
               </article>
 
@@ -676,15 +688,21 @@ export default function Home() {
             <SectionHeading
               title="Automation Progress"
               description="NEW is formal planning. SANDBOX holds synthetic test evidence only."
-              meta={`${snapshot.automation.automations.length} registered items`}
+              meta={`${snapshot.automation.registryCounts.total} source registry records`}
             />
-            <div className="automation-gates">
-              <div><Database size={18} /><span>Data ready</span><strong>{snapshot.automation.automations.filter((x) => x.dataReady).length}</strong><small>explicit readiness records</small></div>
-              <div><TestTube2 size={18} /><span>Test ready</span><strong>{snapshot.automation.automations.filter((x) => x.testReady).length}</strong><small>partial evidence</small></div>
-              <div className="gate-danger"><Zap size={18} /><span>Runtime verified</span><strong>0</strong><small>execution evidence</small></div>
-              <div className="gate-danger"><ShieldCheck size={18} /><span>Live approved</span><strong>0</strong><small>new automations</small></div>
+            <div className="registry-scope-note">
+              <strong>{snapshot.automation.registryCounts.total} total</strong>
+              <span>{snapshot.automation.registryCounts.newOrPlanned} new / planned automations</span>
+              <span>{snapshot.automation.registryCounts.existingLive} pre-existing live records</span>
             </div>
-            <div className="automation-rule"><CircleAlert size={17} /><strong>Formula PASS ≠ Make runtime PASS.</strong><span>Runtime requires execution ID, time and actual result.</span></div>
+            <div className="automation-gates">
+              <div><Database size={18} /><span>Data ready</span><strong>{snapshot.automation.evidenceGateCounts.dataReady}</strong><small>explicit gate · 44 new/planned</small></div>
+              <div className="gate-warning"><TestTube2 size={18} /><span>Partial test evidence</span><strong>{snapshot.automation.evidenceGateCounts.partialTestEvidence}</strong><small>mock/native evidence only</small></div>
+              <div><FileCheck2 size={18} /><span>Test ready</span><strong>{snapshot.automation.evidenceGateCounts.testReady}</strong><small>explicit gate required</small></div>
+              <div className="gate-danger"><Zap size={18} /><span>Runtime verified</span><strong>{snapshot.automation.evidenceGateCounts.runtimeVerified}</strong><small>new/planned executions</small></div>
+              <div className="gate-danger"><ShieldCheck size={18} /><span>Live approved</span><strong>{snapshot.automation.evidenceGateCounts.liveApproved}</strong><small>new/planned approvals</small></div>
+            </div>
+            <div className="automation-rule"><CircleAlert size={17} /><strong>Partial test evidence ≠ Test ready ≠ Make runtime PASS.</strong><span>Test ready needs an explicit gate; runtime needs execution ID, time and actual result.</span></div>
 
             <article className="panel registry-panel">
               <div className="registry-toolbar">
@@ -694,17 +712,18 @@ export default function Home() {
               <Filters {...automationFilters} areas={automationAreas} statuses={automationStatuses} priorities={automationPriorities} onChange={updateAutomationFilter} />
               <div className="table-scroll">
                 <table>
-                  <thead><tr><th>ID / automation</th><th>Business / area</th><th>Priority</th><th>Data</th><th>Test</th><th>Runtime</th><th>Live approval</th><th /></tr></thead>
+                  <thead><tr><th>ID / automation</th><th>Business / area</th><th>Priority</th><th>Data ready</th><th>Partial evidence</th><th>Test ready</th><th>Runtime</th><th>Live approval</th><th /></tr></thead>
                   <tbody>
                     {filteredAutomations.slice(0, 20).map((item) => (
                       <tr key={item.id}>
                         <td><strong>{item.id}</strong><span>{item.name}</span></td>
                         <td>{item.business}<span>{item.area}</span></td>
                         <td><StatusBadge>{item.priority}</StatusBadge></td>
-                        <td><StatusBadge>{item.dataReady ? "READY" : "NOT VERIFIED"}</StatusBadge></td>
-                        <td><StatusBadge>{item.testReady ? "PARTIAL EVIDENCE" : "NOT TESTED"}</StatusBadge></td>
-                        <td><StatusBadge>UNVERIFIED</StatusBadge></td>
-                        <td><StatusBadge>NOT APPROVED</StatusBadge></td>
+                        <td><StatusBadge>{item.recordType === "EXISTING LIVE RECORD" ? "NOT ASSESSED" : item.dataReady ? "READY" : "NOT VERIFIED"}</StatusBadge></td>
+                        <td><StatusBadge>{item.recordType === "EXISTING LIVE RECORD" ? "NOT ASSESSED" : item.partialTestEvidence ? "PARTIAL EVIDENCE" : "NONE RECORDED"}</StatusBadge></td>
+                        <td><StatusBadge>{item.recordType === "EXISTING LIVE RECORD" ? "NOT ASSESSED" : item.testReady ? "READY" : "NOT READY"}</StatusBadge></td>
+                        <td><StatusBadge>{item.recordType === "EXISTING LIVE RECORD" ? "NOT RETESTED" : "UNVERIFIED"}</StatusBadge></td>
+                        <td><StatusBadge>{item.recordType === "EXISTING LIVE RECORD" ? "PRE-EXISTING LIVE" : "NOT APPROVED"}</StatusBadge></td>
                         <td><button className="row-button" onClick={() => openAutomation(item)} aria-label={`View details for ${item.id}`}><ChevronRight size={17} /></button></td>
                       </tr>
                     ))}
@@ -762,6 +781,8 @@ export default function Home() {
                 </article>
               ))}
             </div>
+            <div className="persistence-ribbon"><Database size={18} /><strong>{persistenceLabel}</strong><span>Source freshness remains {dateLabel(snapshot.mrlResults.asOf)} results / {dateLabel(snapshot.stock.asOf)} stock. Database persistence does not make the sources live.</span></div>
+            <EvidenceStoragePanel />
             <article className="boundary-panel">
               <ShieldCheck size={22} />
               <div><h3>Prototype safety boundary</h3><p>No Google Sheet edits. No Make activation or execution. No customer messages. No appointment operations. No payment execution. No API keys, tokens or customer personal data are stored in the frontend.</p></div>
