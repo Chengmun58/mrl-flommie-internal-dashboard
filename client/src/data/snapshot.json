@@ -2,11 +2,32 @@
   "meta": {
     "title": "MRL + Flommie Internal Management Dashboard",
     "language": "English",
-    "mode": "READ-ONLY VERIFIED SNAPSHOT",
+    "mode": "READ-ONLY HISTORICAL SNAPSHOT",
     "generatedAt": "2026-09-14T21:01:39+08:00",
     "autoRefresh": false,
     "publicDeployment": false,
     "privacy": "Aggregate operational data only; no customer phone, address, medical or other personal data embedded."
+  },
+  "currentAudit": {
+    "checkedAt": "2026-09-16T23:11:10+08:00",
+    "sourceWorkbookId": "1iTHf8aF4vZVGnKYolu_pb8tuC5fcMCBFD71Rw533poQ",
+    "sourceWorkbookName": "MRL Results Tracker",
+    "sourceTab": "Data Checks",
+    "sourceRange": "A1:E40",
+    "businessPeriod": "PENDING VERIFICATION",
+    "qualityGates": {
+      "scHeader": "BLOCK",
+      "monthSequence": "BLOCK",
+      "scNumericComposition": "BLOCK",
+      "mrlGate": "BLOCK",
+      "stockComposition": "BLOCK",
+      "stockMeaning": "BOOK ONLY; physical count and shipment completeness unverified"
+    },
+    "sourceObservation": {
+      "mrlTrackerModifiedAt": "2026-09-16T01:00:20.045Z",
+      "automationRegistryModifiedAt": "2026-09-14T13:05:50.106Z",
+      "sandboxModifiedAt": "2026-09-13T14:55:38.015Z"
+    }
   },
   "sources": [
     {

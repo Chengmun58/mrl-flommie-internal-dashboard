@@ -8,10 +8,12 @@ import {
   Check,
   ChevronRight,
   CircleAlert,
+  CirclePause,
   Database,
   FileCheck2,
   Filter,
   Gauge,
+  GitBranch,
   Menu,
   Moon,
   PackageCheck,
@@ -36,6 +38,8 @@ import {
   YAxis,
 } from "recharts";
 import { trpc } from "@/lib/trpc";
+import { ATTRIBUTION_DECISIONS, DATA_TABLES, OBJECTION_SHORTCUTS, PAUSE_STATUS, WORKFLOW_GROUPS } from "@shared/dataArchitecture";
+import { evaluateDashboardAudit, resolveDashboardAudit } from "@shared/dashboardAudit";
 import EvidenceStoragePanel from "../components/EvidenceStoragePanel";
 import embeddedSnapshot from "../data/snapshot.json";
 import { useTheme } from "../contexts/ThemeContext";
@@ -53,6 +57,7 @@ const NOT_OBTAINED = "NOT OBTAINED";
 
 const navItems = [
   { id: "today", label: "Today", icon: Gauge },
+  { id: "architecture", label: "Data Design", icon: GitBranch },
   { id: "results", label: "MRL Results", icon: BarChart3 },
   { id: "stock", label: "Flommie Stock", icon: Box },
   { id: "automation", label: "Automation", icon: Zap },
@@ -272,7 +277,7 @@ function MrlChart({ snapshot }: { snapshot: typeof embeddedSnapshot }) {
       provisional: row.storeSalesProxy,
     }));
   return (
-    <div className="chart-shell" aria-label="Monthly SC revenue trend chart">
+    <div className="chart-shell" aria-label="Historical monthly SC revenue trend chart; current quality gate blocked">
       <ResponsiveContainer width="100%" height="100%">
         <LineChart data={data} margin={{ top: 10, right: 10, left: -16, bottom: 0 }}>
           <CartesianGrid vertical={false} stroke="var(--chart-grid)" />
@@ -300,6 +305,8 @@ export default function Home() {
   const { theme, toggleTheme } = useTheme();
   const persistedSnapshot = trpc.dashboard.latest.useQuery(undefined, { retry: false, refetchOnWindowFocus: false });
   const snapshot = (persistedSnapshot.data?.snapshot ?? embeddedSnapshot) as typeof embeddedSnapshot;
+  const currentAudit = resolveDashboardAudit(snapshot, embeddedSnapshot.currentAudit);
+  const audit = evaluateDashboardAudit(currentAudit);
   const readTime = new Intl.DateTimeFormat("en-SG", {
     day: "2-digit",
     month: "short",
@@ -309,6 +316,19 @@ export default function Home() {
     hour12: false,
     timeZone: "Asia/Singapore",
   }).format(new Date(snapshot.meta.generatedAt));
+  const currentAuditTime = new Intl.DateTimeFormat("en-SG", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZone: "Asia/Singapore",
+  }).format(new Date(currentAudit.checkedAt));
+  const historicalMoney = (value: number | null | undefined) =>
+    audit.mrl.operationallyUsable ? money(value) : `${money(value)} · historical`;
+  const historicalNumber = (value: number | null | undefined) =>
+    audit.stock.operationallyUsable ? number(value) : `${number(value)} · historical`;
   const persistenceLabel = persistedSnapshot.data
     ? `DATABASE SNAPSHOT · ${persistedSnapshot.data.version}`
     : persistedSnapshot.isLoading
@@ -486,13 +506,23 @@ export default function Home() {
           <section className="source-ribbon" aria-label="Connection status">
             <div>
               <span className="live-indicator" aria-hidden="true" />
-              <strong>3 / 3 sources readable</strong>
-              <span>Snapshot only — not live sync</span>
+              <strong>3 / 3 transports readable</strong>
+              <span>Connectivity only — not a business-quality pass</span>
             </div>
             <div className="source-ribbon-meta">
               <span>Results data: {dateLabel(snapshot.mrlResults.asOf)}</span>
               <span>Stock data: {dateLabel(snapshot.stock.asOf)}</span>
             </div>
+          </section>
+
+          <section className="quality-gate-banner" aria-labelledby="quality-gate-title">
+            <CircleAlert size={22} aria-hidden="true" />
+            <div>
+              <span className="eyebrow">CURRENTLY VERIFIED · {currentAuditTime} SGT</span>
+              <strong id="quality-gate-title">Management KPI and stock controls are blocked by the live Data Checks gate.</strong>
+              <p>MRL: {audit.mrl.blockedBy.join(", ")}. Flommie: {audit.stock.blockedBy.join(", ")}. Values below are retained as historical evidence and must not drive current operating decisions.</p>
+            </div>
+            <SourceButton href={snapshot.sources[0].url} label={`Open ${currentAudit.sourceTab ?? "Data Checks"} ${currentAudit.sourceRange ?? "A1:E40"}`} />
           </section>
 
           <section id="today" className="dashboard-section section-first">
@@ -553,11 +583,83 @@ export default function Home() {
             </div>
           </section>
 
+          <section id="architecture" className="dashboard-section">
+            <SectionHeading
+              title="Data architecture before formulas"
+              description="Proposed design: establish authority, event grain, keys and attribution rules before adding Sheets formulas or Apps Script automation."
+              meta="PROPOSED · 10 TABLES"
+            />
+            <div className="architecture-flow" aria-label="Proposed data flow">
+              <div className="flow-sources">
+                <article><StatusBadge>CURRENTLY VERIFIED</StatusBadge><strong>Respond.io</strong><span>Outbound events and contact identity</span></article>
+                <article><StatusBadge>CURRENTLY VERIFIED</StatusBadge><strong>Aoikumo</strong><span>Authoritative appointment operations</span></article>
+                <article><StatusBadge>PENDING VERIFICATION</StatusBadge><strong>Aoikumo Payment</strong><span>Approved read-only payment event access required</span></article>
+              </div>
+              <ChevronRight className="flow-arrow" size={24} aria-hidden="true" />
+              <article className="flow-layer"><span>01 · Raw layer</span><strong>Immutable source events</strong><small>Preserve IDs, timestamps, status history and source hashes.</small></article>
+              <ChevronRight className="flow-arrow" size={24} aria-hidden="true" />
+              <article className="flow-layer"><span>02 · Link & fact layer</span><strong>Versioned attribution</strong><small>Never join by row order or approximate names.</small></article>
+              <ChevronRight className="flow-arrow" size={24} aria-hidden="true" />
+              <article className="flow-layer"><span>03 · KPI layer</span><strong>Daily_CSO_KPI</strong><small>Only verified facts pass into metrics.</small></article>
+              <ChevronRight className="flow-arrow" size={24} aria-hidden="true" />
+              <article className="flow-layer"><span>04 · Dashboard</span><strong>Control-first views</strong><small>Blocked, waiting and stale are never converted to zero.</small></article>
+            </div>
+
+            <div className="workflow-grid">
+              {WORKFLOW_GROUPS.map((group, index) => (
+                <article className="panel workflow-card" key={group.id}>
+                  <span>WORKFLOW {String(index + 1).padStart(2, "0")}</span>
+                  <h3>{group.label}</h3>
+                  <p>{group.outcome}</p>
+                </article>
+              ))}
+              <article className="panel pause-card">
+                <CirclePause size={20} aria-hidden="true" />
+                <div><span>ONE PAUSE STATUS</span><h3>{PAUSE_STATUS.code}</h3><p>{PAUSE_STATUS.label}</p></div>
+              </article>
+            </div>
+
+            <article className="panel schema-panel">
+              <div className="panel-heading">
+                <div><h3>Ten-table data dictionary</h3><p>Fields and types are proposed; source availability and rule approval remain separate evidence states.</p></div>
+                <span>FORMULAS DEFERRED</span>
+              </div>
+              <div className="schema-grid">
+                {DATA_TABLES.map((table) => (
+                  <details className="schema-card" key={table.name}>
+                    <summary>
+                      <span><i>{table.layer}</i><strong>{table.name}</strong><small>{table.authority}</small></span>
+                      <StatusBadge>{table.status}</StatusBadge>
+                    </summary>
+                    <div className="schema-meta"><span>Grain</span><strong>{table.grain}</strong><span>Primary key</span><code>{table.primaryKey}</code></div>
+                    <div className="field-list">
+                      {table.fields.map((item) => (
+                        <div key={item.name}><code>{item.name}</code><span>{item.type}</span><i>{item.required ? "REQUIRED" : "OPTIONAL"}</i><small>{item.description}</small></div>
+                      ))}
+                    </div>
+                  </details>
+                ))}
+              </div>
+              <div className="decision-list">
+                <strong>Material KPI decisions — approval still required</strong>
+                {ATTRIBUTION_DECISIONS.map((item) => (
+                  <div key={item.id}><span>{item.question}</span><p>{item.proposedRule}</p><StatusBadge>{item.status}</StatusBadge></div>
+                ))}
+              </div>
+              <div className="shortcut-bar">
+                <strong>Three objection shortcut workflows</strong>
+                {OBJECTION_SHORTCUTS.map((item) => (
+                  <span key={item.id}><b>{item.label}</b><small>{item.action}</small></span>
+                ))}
+              </div>
+            </article>
+          </section>
+
           <section id="results" className="dashboard-section">
             <SectionHeading
               title="MRL Results"
-              description="Main KPI uses 2026 SC Revenue / Slimming Centre Revenue only."
-              meta={`Data through ${dateLabel(snapshot.mrlResults.asOf)}`}
+              description="Historical snapshot only. The live MRL Data Checks gate is BLOCK, so these values are retained for traceability and suppressed from current decision use."
+              meta={`HISTORICAL · ${dateLabel(snapshot.mrlResults.asOf)}`}
             />
             <div className="definition-bar">
               <span>Annual management KPI</span>
@@ -567,21 +669,21 @@ export default function Home() {
 
             <div className="result-split">
               <article className="result-lane lane-confirmed">
-                <div className="lane-heading"><StatusBadge>CONFIRMED</StatusBadge><span>SC actuals only</span></div>
-                <div className="lane-number">{money(snapshot.mrlResults.confirmed.ytd)}</div>
+                <div className="lane-heading"><StatusBadge>{audit.mrl.evidenceStatus}</StatusBadge><span>Previously confirmed SC actuals</span></div>
+                <div className="lane-number">{historicalMoney(snapshot.mrlResults.confirmed.ytd)}</div>
                 <div className="progress-track" role="progressbar" aria-label="Confirmed KPI achievement" aria-valuenow={snapshot.mrlResults.confirmed.achievement * 100} aria-valuemin={0} aria-valuemax={100}>
                   <span style={{ width: `${snapshot.mrlResults.confirmed.achievement * 100}%` }} />
                 </div>
                 <div className="lane-grid">
-                  <MetricCard label="Achievement" value={percent(snapshot.mrlResults.confirmed.achievement)} meta="of SGD 1.4M" accent="confirmed" />
-                  <MetricCard label="Remaining gap" value={money(snapshot.mrlResults.confirmed.remainingGap)} meta="SC revenue needed" accent="confirmed" />
-                  <MetricCard label="Required monthly run rate" value={money(snapshot.mrlResults.requiredMonthlyRunRateConfirmed)} meta="calendar-day equivalent" accent="confirmed" />
+                  <MetricCard label="Historical achievement" value={percent(snapshot.mrlResults.confirmed.achievement)} meta="blocked for current use" accent="neutral" />
+                  <MetricCard label="Historical remaining gap" value={money(snapshot.mrlResults.confirmed.remainingGap)} meta="blocked for current use" accent="neutral" />
+                  <MetricCard label="Historical run rate" value={money(snapshot.mrlResults.requiredMonthlyRunRateConfirmed)} meta="blocked for current use" accent="neutral" />
                 </div>
               </article>
 
               <article className="result-lane lane-provisional">
                 <div className="lane-heading"><StatusBadge>PROVISIONAL</StatusBadge><span>{snapshot.mrlResults.provisional.proxyMonth} Store Sales proxy</span></div>
-                <div className="lane-number">{money(snapshot.mrlResults.provisional.ytd)}</div>
+                <div className="lane-number">{historicalMoney(snapshot.mrlResults.provisional.ytd)}</div>
                 <div className="progress-track progress-provisional" role="progressbar" aria-label="Provisional KPI achievement" aria-valuenow={snapshot.mrlResults.provisional.achievement * 100} aria-valuemin={0} aria-valuemax={100}>
                   <span style={{ width: `${snapshot.mrlResults.provisional.achievement * 100}%` }} />
                 </div>
@@ -596,11 +698,11 @@ export default function Home() {
             <div className="results-lower-grid">
               <article className="panel chart-panel">
                 <div className="panel-heading">
-                  <div><h3>Monthly SC trend</h3><p>Confirmed actuals; dotted line is provisional proxy only.</p></div>
+                  <div><h3>Historical monthly SC trend</h3><p>Previously confirmed actuals; dotted line is a provisional proxy. Current use is blocked.</p></div>
                   <span className="pace-pill">Elapsed-year pace {percent(snapshot.mrlResults.elapsedYearPace)}</span>
                 </div>
                 <MrlChart snapshot={snapshot} />
-                <div className="legend"><span><i className="legend-confirmed" />Confirmed SC</span><span><i className="legend-provisional" />Provisional proxy</span><span><i className="legend-target" />Monthly target equivalent</span></div>
+                <div className="legend"><span><i className="legend-confirmed" />Historically confirmed SC</span><span><i className="legend-provisional" />Provisional proxy</span><span><i className="legend-target" />Monthly target equivalent</span></div>
               </article>
 
               <article className="panel supplement-panel">
@@ -630,8 +732,8 @@ export default function Home() {
           <section id="stock" className="dashboard-section">
             <SectionHeading
               title="Flommie Stock"
-              description="Book snapshot, reservations and availability are separated."
-              meta={`Snapshot ${dateLabel(snapshot.stock.asOf)}`}
+              description="Historical book snapshot only. The live stock composition gate is BLOCK and current physical stock remains unknown."
+              meta={`HISTORICAL · ${dateLabel(snapshot.stock.asOf)}`}
             />
             <div className="critical-banner">
               <div><AlertTriangle size={20} /><strong>{snapshot.stock.verificationStatus}</strong></div>
@@ -639,15 +741,15 @@ export default function Home() {
             </div>
             <div className="stock-ledger">
               <article className="stock-total">
-                <span>Book closing</span><strong>{number(snapshot.stock.bookClosing)} <small>packs</small></strong><p>After shipped/excluded movements in the dated source snapshot.</p>
+                <span>Historical book closing</span><strong>{historicalNumber(snapshot.stock.bookClosing)}</strong><p>After shipped/excluded movements in the dated source snapshot.</p>
               </article>
               <div className="stock-operator" aria-hidden="true">−</div>
               <article className="stock-total stock-reserved">
-                <span>Reserved</span><strong>{number(snapshot.stock.reserved)} <small>packs</small></strong><p>Not confirmed shipped; not counted as outflow.</p>
+                <span>Historical reserved</span><strong>{historicalNumber(snapshot.stock.reserved)}</strong><p>Not confirmed shipped; not counted as outflow.</p>
               </article>
               <div className="stock-operator" aria-hidden="true">=</div>
               <article className="stock-total stock-available">
-                <span>Book available</span><strong>{number(snapshot.stock.bookAvailable)} <small>packs</small></strong><p>Not a customer promise. Physical stock remains unverified.</p>
+                <span>Historical book available</span><strong>{historicalNumber(snapshot.stock.bookAvailable)}</strong><p>Not a customer promise. Physical stock remains unverified.</p>
               </article>
             </div>
 
@@ -759,8 +861,8 @@ export default function Home() {
           <section id="sources" className="dashboard-section">
             <SectionHeading
               title="Sources & audit boundary"
-              description="Connected, manual snapshot and test-only data are labelled separately."
-              meta="Read-only prototype"
+              description="Transport readability, current quality gates, historical snapshots and test-only data are labelled separately."
+              meta={`AUDITED ${currentAuditTime} SGT`}
             />
             <div className="sources-grid">
               {snapshot.sources.map((source) => (
@@ -781,7 +883,7 @@ export default function Home() {
                 </article>
               ))}
             </div>
-            <div className="persistence-ribbon"><Database size={18} /><strong>{persistenceLabel}</strong><span>Source freshness remains {dateLabel(snapshot.mrlResults.asOf)} results / {dateLabel(snapshot.stock.asOf)} stock. Database persistence does not make the sources live.</span></div>
+            <div className="persistence-ribbon"><Database size={18} /><strong>{persistenceLabel}</strong><span>Historical source dates remain {dateLabel(snapshot.mrlResults.asOf)} results / {dateLabel(snapshot.stock.asOf)} stock. Database persistence and readable transports do not satisfy the live Data Checks gate.</span></div>
             <EvidenceStoragePanel />
             <article className="boundary-panel">
               <ShieldCheck size={22} />
